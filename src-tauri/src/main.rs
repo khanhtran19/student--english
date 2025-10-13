@@ -1,156 +1,172 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::fs;
-use regex::Regex;
-use serde::{Deserialize, Serialize};
-use rusqlite::{Connection, Result};
+mod services;
 
-#[derive(Debug, Serialize, Deserialize)]
-struct Word {
-    id: Option<i64>,
+use services::file_service::FileService;
+use services::parser_service::ParserService;
+use services::database_service::{DatabaseService, Word};
+use services::translation_service::TranslationService;
+
+use std::sync::Mutex;
+use tauri::State;
+
+/// State chứa DatabaseService, được chia sẻ giữa các command
+struct AppState {
+    db: Mutex<DatabaseService>,
+    translator: Mutex<TranslationService>,
+}
+
+/// Command: Đọc file text
+#[tauri::command]
+fn read_text_file(path: String) -> Result<String, String> {
+    FileService::read_text_file(&path)
+}
+
+/// Command: Tách văn bản thành câu
+#[tauri::command]
+fn split_into_sentences(text: String) -> Vec<String> {
+    ParserService::split_into_sentences(&text)
+}
+
+/// Command: Tách văn bản thành từ
+#[tauri::command]
+fn split_into_words(text: String) -> Vec<String> {
+    ParserService::split_into_words(&text)
+}
+
+/// Command: Dịch text từ tiếng Anh sang tiếng Việt
+#[tauri::command]
+async fn translate_text(text: String, _state: State<'_, AppState>) -> Result<String, String> {
+    // Tạo translator mới cho mỗi request để tránh lock issues
+    let translator = TranslationService::new();
+    translator.translate_en_to_vi(&text).await
+}
+
+/// Command: Lưu từ vào database
+#[tauri::command]
+fn save_word(
     word: String,
     translation: String,
     sentence: String,
-    learned: bool,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct Sentence {
-    text: String,
-    translation: String,
-}
-
-// Khởi tạo database
-fn init_db() -> Result<Connection> {
-    let conn = Connection::open("vocabulary.db")?;
-    
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS words (
-            id INTEGER PRIMARY KEY,
-            word TEXT NOT NULL UNIQUE,
-            translation TEXT,
-            sentence TEXT,
-            learned INTEGER DEFAULT 0
-        )",
-        [],
-    )?;
-    
-    Ok(conn)
-}
-
-// Đọc file text
-#[tauri::command]
-fn read_text_file(path: String) -> Result<String, String> {
-    fs::read_to_string(path)
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let db = state.db.lock().unwrap();
+    db.save_word(&word, &translation, &sentence)
+        .map(|_| ())
         .map_err(|e| e.to_string())
 }
 
-// Tách văn bản thành câu
+/// Command: Lấy tất cả từ đã lưu
 #[tauri::command]
-fn split_into_sentences(text: String) -> Vec<String> {
-    let re = Regex::new(r"[.!?]+\s+").unwrap();
-    re.split(&text)
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .collect()
+fn get_all_words(state: State<'_, AppState>) -> Result<Vec<Word>, String> {
+    let db = state.db.lock().unwrap();
+    db.get_all_words().map_err(|e| e.to_string())
 }
 
-// Tách câu thành từ
+/// Command: Đánh dấu từ đã học
 #[tauri::command]
-fn split_into_words(text: String) -> Vec<String> {
-    let re = Regex::new(r"\b[a-zA-Z]+\b").unwrap();
-    re.find_iter(&text)
-        .map(|m| m.as_str().to_lowercase())
-        .collect::<std::collections::HashSet<_>>()
-        .into_iter()
-        .collect()
+fn mark_as_learned(word_id: i64, state: State<'_, AppState>) -> Result<(), String> {
+    let db = state.db.lock().unwrap();
+    db.mark_as_learned(word_id).map_err(|e| e.to_string())
 }
 
-// Dịch text bằng API (MyMemory - free)
+/// Command: Xóa từ khỏi database
 #[tauri::command]
-async fn translate_text(text: String) -> Result<String, String> {
-    let url = format!(
-        "https://api.mymemory.translated.net/get?q={}&langpair=en|vi",
-        urlencoding::encode(&text)
-    );
-    
-    let client = reqwest::Client::new();
-    let response = client.get(&url)
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-    
-    let json: serde_json::Value = response.json()
-        .await
-        .map_err(|e| e.to_string())?;
-    
-    let translation = json["responseData"]["translatedText"]
-        .as_str()
-        .unwrap_or("Translation error")
-        .to_string();
-    
-    Ok(translation)
+fn delete_word(word_id: i64, state: State<'_, AppState>) -> Result<(), String> {
+    let db = state.db.lock().unwrap();
+    db.delete_word(word_id).map_err(|e| e.to_string())
 }
 
-// Lưu từ vào database
+/// Command: Lấy thống kê từ vựng
 #[tauri::command]
-fn save_word(word: String, translation: String, sentence: String) -> Result<(), String> {
-    let conn = init_db().map_err(|e| e.to_string())?;
-    
-    conn.execute(
-        "INSERT OR REPLACE INTO words (word, translation, sentence, learned) 
-         VALUES (?1, ?2, ?3, 0)",
-        &[&word, &translation, &sentence],
-    ).map_err(|e| e.to_string())?;
-    
-    Ok(())
+fn get_vocabulary_stats(state: State<'_, AppState>) -> Result<(i64, i64), String> {
+    let db = state.db.lock().unwrap();
+    let total = db.count_total_words().map_err(|e| e.to_string())?;
+    let learned = db.count_learned_words().map_err(|e| e.to_string())?;
+    Ok((total, learned))
 }
 
-// Lấy tất cả từ đã lưu
+/// Command: Xử lý file - đọc file và tách thành từ và câu
 #[tauri::command]
-fn get_all_words() -> Result<Vec<Word>, String> {
-    let conn = init_db().map_err(|e| e.to_string())?;
-    
-    let mut stmt = conn.prepare(
-        "SELECT id, word, translation, sentence, learned FROM words"
-    ).map_err(|e| e.to_string())?;
-    
-    let words = stmt.query_map([], |row| {
-        Ok(Word {
-            id: row.get(0)?,
-            word: row.get(1)?,
-            translation: row.get(2)?,
-            sentence: row.get(3)?,
-            learned: row.get::<_, i32>(4)? == 1,
-        })
-    }).map_err(|e| e.to_string())?;
-    
-    let mut result = Vec::new();
+fn process_text_file(path: String) -> Result<(Vec<String>, Vec<String>), String> {
+    // Đọc file
+    let content = FileService::read_text_file(&path)?;
+
+    // Tách thành câu
+    let sentences = ParserService::split_into_sentences(&content);
+
+    // Tách thành từ (loại bỏ từ ngắn < 3 ký tự)
+    let all_words = ParserService::split_into_words(&content);
+    let words = ParserService::filter_words_by_length(all_words, 3);
+
+    Ok((sentences, words))
+}
+
+/// Command: Lưu nhiều từ cùng lúc sau khi dịch
+#[tauri::command]
+async fn save_words_from_file(
+    words: Vec<String>,
+    sentences: Vec<String>,
+    state: State<'_, AppState>,
+) -> Result<usize, String> {
+    // Tạo translator mới để tránh lock issues
+    let translator = TranslationService::new();
+    let mut words_to_save = Vec::new();
+
     for word in words {
-        result.push(word.map_err(|e| e.to_string())?);
+        // Dịch từ
+        match translator.translate_en_to_vi(&word).await {
+            Ok(translation) => {
+                // Tìm câu chứa từ này
+                let sentence = ParserService::find_sentences_with_word(&word, &sentences)
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| "No context".to_string());
+
+                words_to_save.push((word, translation, sentence));
+            }
+            Err(_) => continue, // Skip nếu không dịch được
+        }
+
+        // Delay để tránh rate limit
+        tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
     }
-    
-    Ok(result)
+
+    let db = state.db.lock().unwrap();
+    db.save_words_batch(words_to_save)
+        .map_err(|e| e.to_string())
 }
 
-// Đánh dấu từ đã học
+/// Command: Tìm từ trong database
 #[tauri::command]
-fn mark_as_learned(word_id: i64) -> Result<(), String> {
-    let conn = init_db().map_err(|e| e.to_string())?;
-    
-    conn.execute(
-        "UPDATE words SET learned = 1 WHERE id = ?1",
-        &[&word_id],
-    ).map_err(|e| e.to_string())?;
-    
-    Ok(())
+fn find_word(word: String, state: State<'_, AppState>) -> Result<Option<Word>, String> {
+    let db = state.db.lock().unwrap();
+    db.find_word_by_text(&word).map_err(|e| e.to_string())
+}
+
+/// Command: Làm sạch từ
+#[tauri::command]
+fn clean_word(word: String) -> String {
+    ParserService::clean_word(&word)
 }
 
 fn main() {
-    // Khởi tạo database khi app start
-    init_db().expect("Failed to initialize database");
-    
+    // Khởi tạo database
+    let db_service = DatabaseService::new("vocabulary.db");
+    db_service.init().expect("Failed to initialize database");
+
+    // Khởi tạo translation service
+    let translation_service = TranslationService::new();
+
+    // Tạo app state
+    let app_state = AppState {
+        db: Mutex::new(db_service),
+        translator: Mutex::new(translation_service),
+    };
+
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .manage(app_state)
         .invoke_handler(tauri::generate_handler![
             read_text_file,
             split_into_sentences,
@@ -158,7 +174,13 @@ fn main() {
             translate_text,
             save_word,
             get_all_words,
-            mark_as_learned
+            mark_as_learned,
+            delete_word,
+            get_vocabulary_stats,
+            process_text_file,
+            save_words_from_file,
+            find_word,
+            clean_word,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

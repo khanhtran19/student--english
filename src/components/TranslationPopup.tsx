@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import type { TranslationData } from '../types';
 
 interface TranslationPopupProps {
@@ -24,4 +25,6 @@ function TranslationPopup({ data, onSave, onClose }: TranslationPopupProps) {
     );
 }
 
-export default TranslationPopup;
+// Memo component để tránh re-render không cần thiết
+// Popup chỉ re-render khi data, onSave, hoặc onClose thay đổi
+export default memo(TranslationPopup);

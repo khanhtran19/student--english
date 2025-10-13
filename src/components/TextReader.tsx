@@ -1,6 +1,6 @@
-import { useState } from 'react';
-import { invoke } from '@tauri-apps/api/tauri';
-import { open } from '@tauri-apps/api/dialog';
+import { useState, useMemo, useCallback } from 'react';
+import { invoke } from '@tauri-apps/api/core';
+import { open } from '@tauri-apps/plugin-dialog';
 import TranslationPopup from './TranslationPopup';
 import type { TranslationData } from '../types';
 
@@ -29,12 +29,13 @@ function TextReader() {
                 setTextContent(content);
             }
         } catch (error) {
+            console.error('Upload error:', error);
             alert('Lỗi: ' + error);
         }
     };
 
     // Click vào từ
-    const handleWordClick = async (word: string, sentence: string) => {
+    const handleWordClick = useCallback(async (word: string, sentence: string) => {
         setShowPopup(true);
         setTranslationData({
             word,
@@ -56,10 +57,10 @@ function TextReader() {
                 sentence
             });
         }
-    };
+    }, []);
 
     // Lưu từ
-    const handleSaveWord = async () => {
+    const handleSaveWord = useCallback(async () => {
         if (!translationData) return;
 
         try {
@@ -73,10 +74,10 @@ function TextReader() {
         } catch (error) {
             alert('Lỗi: ' + error);
         }
-    };
+    }, [translationData]);
 
-    // Render text với highlight
-    const renderText = () => {
+    // Render text với highlight - Memoize để tránh re-render
+    const renderedText = useMemo(() => {
         if (!textContent) return null;
 
         const sentences = textContent.split(/[.!?]+/).filter(s => s.trim());
@@ -107,7 +108,7 @@ function TextReader() {
                 </span>
             );
         });
-    };
+    }, [textContent, handleWordClick]);
 
     return (
         <div className="tab-content active">
@@ -120,7 +121,7 @@ function TextReader() {
 
             <div className="text-display">
                 <div id="text-content">
-                    {renderText()}
+                    {renderedText}
                 </div>
             </div>
 

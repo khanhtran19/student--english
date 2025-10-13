@@ -1,0 +1,24 @@
+Perfect! I'll create your vocabulary learning tool with automatic Vietnamese translations. Let me build this for you now.Perfect! Your Smart Vocabulary Flashcard Learning tool is ready! 🎉
+
+## How to Use It:
+
+1. **Paste Your Text** - Copy any English passage (article, story, essay) and paste it in the text box
+
+2. **Analyze** - Click "Analyze & Create Flashcards" and the app will:
+   - Find all meaningful words (filters out common words like "the", "is", "a")
+   - Count how many times each word appears
+   - Sort them by frequency (most repeated words first)
+
+3. **Study with Flashcards**:
+   - See each word with its frequency count and context from your passage
+   - Click "Show Vietnamese Meaning" to get automatic Vietnamese translation
+   - Choose "Study Again" if you need more practice, or "Mark as Learned" to move it to the next cycle
+
+4. **Track Progress**:
+   - Words start in Cycle 1
+   - When you mark a word as learned, it moves to Cycle 2, then 3, etc.
+   - Click "View Progress" to see all your words organized by cycle
+
+The most frequently repeated words will appear first, so you learn the most important vocabulary from your passage right away!
+
+Try it out with any English text you're studying! 📚✨
