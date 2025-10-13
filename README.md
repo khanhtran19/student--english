@@ -226,6 +226,8 @@ CREATE TABLE words (
 
 - [ARCHITECTURE.md](./ARCHITECTURE.md) - Kiến trúc chi tiết
 - [TROUBLESHOOTING.md](./TROUBLESHOOTING.md) - Xử lý lỗi chi tiết
+- [PERFORMANCE.md](./PERFORMANCE.md) - Tối ưu hiệu suất (Best practices)
+- [PERFORMANCE_FIXES.md](./PERFORMANCE_FIXES.md) - Tổng hợp tất cả các fix đã áp dụng
 - [USAGE_EXAMPLES.md](./USAGE_EXAMPLES.md) - Ví dụ code
 - [RUNNING.md](./RUNNING.md) - Hướng dẫn chạy app
 
