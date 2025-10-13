@@ -1,31 +1,34 @@
-import { useState, useEffect } from 'react';
-import { invoke } from '@tauri-apps/api/tauri';
+import { useState, useEffect, useCallback } from 'react';
+import { invoke } from '@tauri-apps/api/core';
+
 import type { Word } from '../types';
 
 function VocabularyList() {
     const [words, setWords] = useState<Word[]>([]);
 
-    const loadVocabulary = async () => {
+    const loadVocabulary = useCallback(async () => {
         try {
             const result = await invoke<Word[]>('get_all_words');
             setWords(result);
         } catch (error) {
+            console.error('Load error:', error);
             alert('Lỗi tải từ vựng: ' + error);
         }
-    };
+    }, []);
 
-    const markLearned = async (wordId: number) => {
+    const markLearned = useCallback(async (wordId: number) => {
         try {
             await invoke('mark_as_learned', { wordId });
-            loadVocabulary();
+            await loadVocabulary();
         } catch (error) {
+            console.error('Mark learned error:', error);
             alert('Lỗi: ' + error);
         }
-    };
+    }, [loadVocabulary]);
 
     useEffect(() => {
         loadVocabulary();
-    }, []);
+    }, [loadVocabulary]);
 
     return (
         <div className="tab-content active">
