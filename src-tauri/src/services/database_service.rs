@@ -44,9 +44,26 @@ impl DatabaseService {
             [],
         )?;
 
+        // Tạo bảng common words (từ thông dụng)
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS common (
+                id INTEGER PRIMARY KEY,
+                word TEXT NOT NULL UNIQUE,
+                translation TEXT,
+                sentence TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )",
+            [],
+        )?;
+
         // Tạo index để tìm kiếm nhanh hơn
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_word ON words(word)",
+            [],
+        )?;
+
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_common_word ON common(word)",
             [],
         )?;
 
@@ -224,6 +241,72 @@ impl DatabaseService {
         let conn = self.get_connection()?;
         conn.execute("DELETE FROM words", [])?;
         Ok(())
+    }
+
+    /// Lưu từ vào bảng common
+    pub fn save_common_word(&self, word: &str, translation: &str, sentence: &str) -> Result<i64> {
+        let conn = self.get_connection()?;
+
+        conn.execute(
+            "INSERT OR REPLACE INTO common (word, translation, sentence)
+             VALUES (?1, ?2, ?3)",
+            &[word, translation, sentence],
+        )?;
+
+        Ok(conn.last_insert_rowid())
+    }
+
+    /// Kiểm tra từ có tồn tại trong bảng words không
+    pub fn word_exists_in_words(&self, word: &str) -> Result<bool> {
+        let conn = self.get_connection()?;
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM words WHERE word = ?1",
+            &[word],
+            |row| row.get(0),
+        )?;
+        Ok(count > 0)
+    }
+
+    /// Kiểm tra từ có tồn tại trong bảng common không
+    pub fn word_exists_in_common(&self, word: &str) -> Result<bool> {
+        let conn = self.get_connection()?;
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM common WHERE word = ?1",
+            &[word],
+            |row| row.get(0),
+        )?;
+        Ok(count > 0)
+    }
+
+    /// Kiểm tra từ có tồn tại trong bất kỳ bảng nào không
+    pub fn word_exists(&self, word: &str) -> Result<bool> {
+        Ok(self.word_exists_in_words(word)? || self.word_exists_in_common(word)?)
+    }
+
+    /// Lấy tất cả từ từ bảng common
+    pub fn get_all_common_words(&self) -> Result<Vec<Word>> {
+        let conn = self.get_connection()?;
+
+        let mut stmt = conn.prepare(
+            "SELECT id, word, translation, sentence, 0 as learned FROM common ORDER BY created_at DESC"
+        )?;
+
+        let words = stmt.query_map([], |row| {
+            Ok(Word {
+                id: row.get(0)?,
+                word: row.get(1)?,
+                translation: row.get(2)?,
+                sentence: row.get(3)?,
+                learned: false,
+            })
+        })?;
+
+        let mut result = Vec::new();
+        for word in words {
+            result.push(word?);
+        }
+
+        Ok(result)
     }
 }
 
