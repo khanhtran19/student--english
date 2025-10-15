@@ -2,13 +2,13 @@
 
 mod services;
 
+use services::database_service::{DatabaseService, Word};
 use services::file_service::FileService;
 use services::parser_service::ParserService;
-use services::database_service::{DatabaseService, Word};
 use services::translation_service::TranslationService;
 
 use std::sync::Mutex;
-use tauri::State;
+use tauri::{Emitter, State};
 
 /// State chứa DatabaseService, được chia sẻ giữa các command
 struct AppState {
@@ -150,6 +150,126 @@ fn clean_word(word: String) -> String {
     ParserService::clean_word(&word)
 }
 
+/// Command: Parse file và trả về danh sách từ chưa lưu với nghĩa đã dịch
+#[tauri::command]
+async fn parse_file_and_get_unsaved_words(
+    path: String,
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> Result<Vec<Word>, String> {
+    // Đọc file
+    let content = FileService::read_text_file(&path)?;
+
+    // Tách thành câu
+    let sentences = ParserService::split_into_sentences(&content);
+
+    // Tách thành từ (loại bỏ từ ngắn < 3 ký tự)
+    let all_words = ParserService::split_into_words(&content);
+    let words = ParserService::filter_words_by_length(all_words, 3);
+
+    // Lọc các từ chưa tồn tại
+    let mut words_to_translate = Vec::new();
+    {
+        let db = state.db.lock().unwrap();
+        for word in words {
+            let exists = db.word_exists(&word).map_err(|e| e.to_string())?;
+            if !exists {
+                words_to_translate.push(word);
+            }
+        }
+    } // Lock được release ở đây
+
+    let total_words = words_to_translate.len();
+
+    // Emit progress: bắt đầu
+    let _ = app.emit(
+        "translation-progress",
+        serde_json::json!({
+            "current": 0,
+            "total": total_words,
+            "percentage": 0
+        }),
+    );
+
+    // Tạo translator
+    let translator = TranslationService::new();
+    let mut result_words = Vec::new();
+
+    for (index, word) in words_to_translate.iter().enumerate() {
+        // Dịch từ
+        match translator.translate_en_to_vi(&word).await {
+            Ok(translation) => {
+                // Tìm câu chứa từ này
+                let sentence = ParserService::find_sentences_with_word(&word, &sentences)
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| "No context".to_string());
+
+                result_words.push(Word {
+                    id: None,
+                    word: word.clone(),
+                    translation,
+                    sentence,
+                    learned: false,
+                });
+            }
+            Err(_) => continue, // Skip nếu không dịch được
+        }
+
+        // Emit progress
+        let current = index + 1;
+        let percentage = (current as f64 / total_words as f64 * 100.0) as u32;
+        let _ = app.emit(
+            "translation-progress",
+            serde_json::json!({
+                "current": current,
+                "total": total_words,
+                "percentage": percentage
+            }),
+        );
+
+        // Delay để tránh rate limit
+        tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+    }
+
+    Ok(result_words)
+}
+
+/// Command: Lưu từ vào bảng common
+#[tauri::command]
+fn save_word_to_common(
+    word: String,
+    translation: String,
+    sentence: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let db = state.db.lock().unwrap();
+    db.save_common_word(&word, &translation, &sentence)
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+/// Command: Lưu từ vào bảng words (giữ nguyên như cũ)
+#[tauri::command]
+fn save_word_to_words(
+    word: String,
+    translation: String,
+    sentence: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let db = state.db.lock().unwrap();
+    db.save_word(&word, &translation, &sentence)
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+/// Command: Lấy tất cả từ từ bảng common
+#[tauri::command]
+fn get_all_common_words(state: State<'_, AppState>) -> Result<Vec<Word>, String> {
+    let db = state.db.lock().unwrap();
+    db.get_all_common_words().map_err(|e| e.to_string())
+}
+
 fn main() {
     // Khởi tạo database
     let db_service = DatabaseService::new("vocabulary.db");
@@ -181,6 +301,10 @@ fn main() {
             save_words_from_file,
             find_word,
             clean_word,
+            parse_file_and_get_unsaved_words,
+            save_word_to_common,
+            save_word_to_words,
+            get_all_common_words,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -1,14 +1,36 @@
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { open } from '@tauri-apps/plugin-dialog';
 import TranslationPopup from './TranslationPopup';
-import type { TranslationData } from '../types';
+import WordPreviewList from './WordPreviewList';
+import type { TranslationData, Word } from '../types';
+
+interface ProgressData {
+    current: number;
+    total: number;
+    percentage: number;
+}
 
 function TextReader() {
     const [fileName, setFileName] = useState<string>('');
     const [textContent, setTextContent] = useState<string>('');
     const [showPopup, setShowPopup] = useState<boolean>(false);
     const [translationData, setTranslationData] = useState<TranslationData | null>(null);
+    const [previewWords, setPreviewWords] = useState<Word[]>([]);
+    const [isProcessing, setIsProcessing] = useState<boolean>(false);
+    const [progress, setProgress] = useState<ProgressData | null>(null);
+
+    // Lắng nghe progress events từ backend
+    useEffect(() => {
+        const unlisten = listen<ProgressData>('translation-progress', (event) => {
+            setProgress(event.payload);
+        });
+
+        return () => {
+            unlisten.then(fn => fn());
+        };
+    }, []);
 
     // Upload file
     const handleUpload = async () => {
@@ -27,6 +49,28 @@ function TextReader() {
 
                 const content = await invoke<string>('read_text_file', { path: selected });
                 setTextContent(content);
+
+                // Tự động parse file và lấy danh sách từ chưa lưu
+                setIsProcessing(true);
+                setPreviewWords([]);
+                setProgress(null);
+
+                try {
+                    const words = await invoke<Word[]>('parse_file_and_get_unsaved_words', { path: selected });
+                    setPreviewWords(words);
+
+                    if (words.length === 0) {
+                        alert('ℹ️ Tất cả các từ trong file đã được lưu trước đó!');
+                    } else {
+                        alert(`✅ Tìm thấy ${words.length} từ mới chưa được lưu!`);
+                    }
+                } catch (error) {
+                    console.error('Parse error:', error);
+                    alert('Lỗi khi phân tích file: ' + error);
+                } finally {
+                    setIsProcessing(false);
+                    setProgress(null);
+                }
             }
         } catch (error) {
             console.error('Upload error:', error);
@@ -110,14 +154,43 @@ function TextReader() {
         });
     }, [textContent, handleWordClick]);
 
+    const handleWordsSaved = () => {
+        // Callback khi từ được lưu thành công
+        // Có thể refresh danh sách hoặc hiển thị thông báo
+    };
+
     return (
         <div className="tab-content active">
             <div className="upload-section">
-                <button onClick={handleUpload} className="btn-primary">
-                    📁 Chọn file văn bản
+                <button onClick={handleUpload} className="btn-primary" disabled={isProcessing}>
+                    {isProcessing ? '⏳ Đang xử lý...' : '📁 Chọn file văn bản'}
                 </button>
                 {fileName && <span id="file-name">📄 {fileName}</span>}
             </div>
+
+            {/* Progress bar */}
+            {isProcessing && progress && progress.total > 0 && (
+                <div className="progress-container">
+                    <div className="progress-info">
+                        <span>Đang dịch từ: {progress.current} / {progress.total}</span>
+                        <span>{progress.percentage}%</span>
+                    </div>
+                    <div className="progress-bar-wrapper">
+                        <div
+                            className="progress-bar-fill"
+                            style={{ width: `${progress.percentage}%` }}
+                        />
+                    </div>
+                </div>
+            )}
+
+            {/* Hiển thị danh sách từ preview */}
+            {previewWords.length > 0 && (
+                <WordPreviewList
+                    words={previewWords}
+                    onWordsSaved={handleWordsSaved}
+                />
+            )}
 
             <div className="text-display">
                 <div id="text-content">
